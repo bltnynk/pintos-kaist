@@ -20,6 +20,9 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
+/* Smallest wakeup ticks of threads in sleep list */
+static int64_t min_wakeup_ticks = INT64_MAX;
+
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
@@ -73,11 +76,37 @@ timer_calibrate (void) {
 /* Returns the number of timer ticks since the OS booted. */
 int64_t
 timer_ticks (void) {
+	/* Can we use other synchronization primitives here? */
 	enum intr_level old_level = intr_disable ();
 	int64_t t = ticks;
 	intr_set_level (old_level);
 	barrier ();
 	return t;
+}
+
+/* Returns the number of timer ticks since the OS booted. */
+int64_t
+get_min_wakeup_ticks (void) {
+	/* Can we use other synchronization primitives here? */
+	enum intr_level old_level = intr_disable ();
+	int64_t t = min_wakeup_ticks;
+	intr_set_level (old_level);
+	barrier ();
+	return t;
+}
+
+bool
+set_min_wakeup_ticks (int64_t wakeup_ticks) {
+	/* Can we use other synchronization primitives here? */
+	enum intr_level old_level = intr_disable ();
+	bool ret = false;
+	if (wakeup_ticks < min_wakeup_ticks) {
+		ret = true;
+		min_wakeup_ticks = wakeup_ticks;
+	}
+	intr_set_level (old_level);
+	barrier ();
+	return ret;
 }
 
 /* Returns the number of timer ticks elapsed since THEN, which
@@ -93,8 +122,8 @@ timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	if (timer_elapsed (start) < ticks)
+		thread_sleep(start + ticks);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -120,12 +149,18 @@ void
 timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+	int64_t min_wakeup_ticks = get_min_wakeup_ticks();
+	int64_t cur_ticks = timer_ticks();
+
+	if (!list_empty(&sleep_list) && min_wakeup_ticks <= cur_ticks) {
+		threads_timer_wakeup();
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

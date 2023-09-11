@@ -10,6 +10,7 @@
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #include "intrinsic.h"
 #ifdef USERPROG
 #include "userprog/process.h"
@@ -26,7 +27,10 @@
 
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
-static struct list ready_list;
+struct list ready_list;
+
+/* List of processes in THREAD_BLOCKED state */
+struct list sleep_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -108,6 +112,7 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
+	list_init (&sleep_list);
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
@@ -308,6 +313,23 @@ thread_yield (void) {
 	intr_set_level (old_level);
 }
 
+void
+thread_sleep(int64_t end_ticks) {
+	struct thread *curr = thread_current ();
+	enum intr_level old_level;
+
+	ASSERT (!intr_context ());
+
+	old_level = intr_disable();
+	if (curr != idle_thread) {
+		set_min_wakeup_ticks(end_ticks);
+		curr->wakeup_tick = end_ticks;
+		list_push_back (&sleep_list, &curr->elem);
+	}
+	do_schedule(THREAD_BLOCKED);
+	intr_set_level (old_level);
+}
+
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
@@ -345,6 +367,21 @@ int
 thread_get_recent_cpu (void) {
 	/* TODO: Your implementation goes here */
 	return 0;
+}
+
+void
+threads_timer_wakeup(void) {
+
+	for (struct list_elem * e = list_begin (&sleep_list); e != list_end (&sleep_list); e = list_next (e)) {
+		struct thread *sleeping_thread = list_entry (e, struct thread, elem);
+		if (sleeping_thread->wakeup_tick <= timer_ticks()) {
+			set_min_wakeup_ticks(sleeping_thread->wakeup_tick);
+			struct list_elem * temp_e = list_remove(e);
+			sleeping_thread->status = THREAD_READY;
+			list_push_back(&ready_list, e);
+			e = list_prev(temp_e);
+		}
+	}
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.

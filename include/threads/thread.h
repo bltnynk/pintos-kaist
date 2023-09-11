@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "fixed-point.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -91,9 +92,15 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
+	int original_priority;              /* Original Priority (no donors). */
+	struct list donors;                 /* list of Donors. */
+	struct lock *wait_on_lock;
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
+	struct list_elem donor_elem;        /* Donoation list element. */
+	FP recent_cpu;
+	int nice;
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -107,7 +114,20 @@ struct thread {
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
+
+	/* tick till wakeup */
+	int64_t wakeup_tick;
 };
+
+/* List of processes in THREAD_READY state, that is, processes
+   that are ready to run but not actually running. */
+extern struct list ready_list;
+
+/* List of processes in THREAD_BLOCKED state */
+extern struct list sleep_list;
+
+/* Load average */
+extern FP load_avg;
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -133,14 +153,22 @@ const char *thread_name (void);
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
 
+void thread_sleep(int64_t end_ticks);
+
 int thread_get_priority (void);
 void thread_set_priority (int);
+void priority_nested_update(struct thread *thr);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
+void threads_timer_wakeup(void);
+bool thread_cmp_priority(const struct list_elem *a, const struct list_elem *b);
+
 void do_iret (struct intr_frame *tf);
+void update_after_one_second();
+void update_after_four_ticks();
 
 #endif /* threads/thread.h */

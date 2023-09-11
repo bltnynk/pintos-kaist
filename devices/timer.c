@@ -20,6 +20,9 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
+/* Smallest wakeup ticks of threads in sleep list */
+static int64_t min_wakeup_ticks = INT64_MAX;
+
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
@@ -73,6 +76,7 @@ timer_calibrate (void) {
 /* Returns the number of timer ticks since the OS booted. */
 int64_t
 timer_ticks (void) {
+	/* Can we use other synchronization primitives here? */
 	enum intr_level old_level = intr_disable ();
 	int64_t t = ticks;
 	intr_set_level (old_level);
@@ -93,8 +97,8 @@ timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	if (timer_elapsed (start) < ticks)
+		thread_sleep(start + ticks);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -120,12 +124,28 @@ void
 timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
+
+	if (!list_empty(&sleep_list)) {
+		threads_timer_wakeup();
+	}
+
+	if (thread_mlfqs) {
+		if (ticks % TIMER_FREQ == 0) {
+			update_after_one_second();
+		}
+		struct thread *trash = thread_current();
+		thread_current()->recent_cpu += FP(1);
+
+		if (ticks % 4 == 0) {
+			update_after_four_ticks();
+		}
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
@@ -184,3 +204,4 @@ real_time_sleep (int64_t num, int32_t denom) {
 		busy_wait (loops_per_tick * num / 1000 * TIMER_FREQ / (denom / 1000));
 	}
 }
+

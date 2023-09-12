@@ -29,7 +29,7 @@
    that are ready to run but not actually running. */
 struct list ready_list;
 
-/* List of processes in THREAD_BLOCKED state */
+/* List of sleeping processes in THREAD_BLOCKED state */
 struct list sleep_list;
 
 /* Idle thread. */
@@ -63,7 +63,6 @@ static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *next_thread_to_run (void);
 static void init_thread (struct thread *, const char *name, int priority);
-static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 
@@ -211,7 +210,11 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
-
+	
+	int cur_priority = thread_get_priority();
+	if (cur_priority < t->priority) {
+		thread_yield();
+	}
 	return tid;
 }
 
@@ -245,7 +248,7 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	list_insert_ordered(&ready_list, &t->elem, thread_cmp_priority, NULL);
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -308,7 +311,7 @@ thread_yield (void) {
 
 	old_level = intr_disable ();
 	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
+		list_insert_ordered(&ready_list, &curr->elem, thread_cmp_priority, NULL);
 	do_schedule (THREAD_READY);
 	intr_set_level (old_level);
 }
@@ -322,9 +325,8 @@ thread_sleep(int64_t end_ticks) {
 
 	old_level = intr_disable();
 	if (curr != idle_thread) {
-		set_min_wakeup_ticks(end_ticks);
 		curr->wakeup_tick = end_ticks;
-		list_push_back (&sleep_list, &curr->elem);
+		list_insert_ordered (&sleep_list, &curr->elem, thread_cmp_priority, NULL);
 	}
 	do_schedule(THREAD_BLOCKED);
 	intr_set_level (old_level);
@@ -333,7 +335,17 @@ thread_sleep(int64_t end_ticks) {
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	struct thread *cur_thread = thread_current();
+	cur_thread->priority = new_priority;
+	cur_thread->original_priority = new_priority;
+	for (struct list_elem * e = list_begin (&cur_thread->donors); e != list_end (&cur_thread->donors); e = list_next (e)) {
+		struct thread *donor_thread = list_entry (e, struct thread, donor_elem);
+		if (donor_thread->priority > cur_thread->priority) {
+			cur_thread->priority = donor_thread->priority;
+		}
+	}
+	priority_nested_update(cur_thread);
+	thread_yield();
 }
 
 /* Returns the current thread's priority. */
@@ -375,14 +387,20 @@ threads_timer_wakeup(void) {
 	for (struct list_elem * e = list_begin (&sleep_list); e != list_end (&sleep_list); e = list_next (e)) {
 		struct thread *sleeping_thread = list_entry (e, struct thread, elem);
 		if (sleeping_thread->wakeup_tick <= timer_ticks()) {
-			set_min_wakeup_ticks(sleeping_thread->wakeup_tick);
 			struct list_elem * temp_e = list_remove(e);
-			sleeping_thread->status = THREAD_READY;
-			list_push_back(&ready_list, e);
+			thread_unblock(sleeping_thread);
 			e = list_prev(temp_e);
 		}
 	}
 }
+
+bool
+thread_cmp_priority(const struct list_elem *a, const struct list_elem *b) {
+	struct thread *thread_a = list_entry (a, struct thread, elem);
+	struct thread *thread_b = list_entry (b, struct thread, elem);
+	return thread_a->priority > thread_b->priority;
+}
+
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
@@ -445,6 +463,9 @@ init_thread (struct thread *t, const char *name, int priority) {
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
+	t->original_priority = priority;
+	list_init(&t->donors);
+	t->wait_on_lock = NULL;
 	t->magic = THREAD_MAGIC;
 }
 
@@ -562,7 +583,7 @@ thread_launch (struct thread *th) {
  * This function modify current thread's status to status and then
  * finds another thread to run and switches to it.
  * It's not safe to call printf() in the schedule(). */
-static void
+void
 do_schedule(int status) {
 	ASSERT (intr_get_level () == INTR_OFF);
 	ASSERT (thread_current()->status == THREAD_RUNNING);
@@ -624,4 +645,28 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+/* Helper to deal with nested priority donation */
+void
+priority_nested_update(struct thread* thr) {
+	int priority = thr->priority;
+	while (1) {
+		struct lock* lock = thr->wait_on_lock;
+		if (!lock) return;
+		thr = lock->holder;
+		if (!thr) return;
+		if (thr->priority < priority) {
+			thr->priority = priority;
+		}
+		else {
+			thr->priority = priority > thr->original_priority ? priority : thr->priority;
+			for (struct list_elem * e = list_begin (&thr->donors); e != list_end (&thr->donors); e = list_next (e)) {
+				struct thread *donor_thread = list_entry (e, struct thread, donor_elem);
+				if (donor_thread->priority > thr->priority) {
+					thr->priority = donor_thread->priority;
+				}
+			}
+		}
+	} 
 }

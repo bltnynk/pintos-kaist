@@ -84,31 +84,6 @@ timer_ticks (void) {
 	return t;
 }
 
-/* Returns the number of timer ticks since the OS booted. */
-int64_t
-get_min_wakeup_ticks (void) {
-	/* Can we use other synchronization primitives here? */
-	enum intr_level old_level = intr_disable ();
-	int64_t t = min_wakeup_ticks;
-	intr_set_level (old_level);
-	barrier ();
-	return t;
-}
-
-bool
-set_min_wakeup_ticks (int64_t wakeup_ticks) {
-	/* Can we use other synchronization primitives here? */
-	enum intr_level old_level = intr_disable ();
-	bool ret = false;
-	if (wakeup_ticks < min_wakeup_ticks) {
-		ret = true;
-		min_wakeup_ticks = wakeup_ticks;
-	}
-	intr_set_level (old_level);
-	barrier ();
-	return ret;
-}
-
 /* Returns the number of timer ticks elapsed since THEN, which
    should be a value once returned by timer_ticks(). */
 int64_t
@@ -155,10 +130,9 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
-	int64_t min_wakeup_ticks = get_min_wakeup_ticks();
 	int64_t cur_ticks = timer_ticks();
 
-	if (!list_empty(&sleep_list) && min_wakeup_ticks <= cur_ticks) {
+	if (!list_empty(&sleep_list)) {
 		threads_timer_wakeup();
 	}
 }

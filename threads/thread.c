@@ -32,6 +32,9 @@ struct list ready_list;
 /* List of sleeping processes in THREAD_BLOCKED state */
 struct list sleep_list;
 
+/* Load average */
+FP load_avg;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -63,6 +66,7 @@ static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *next_thread_to_run (void);
 static void init_thread (struct thread *, const char *name, int priority);
+static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 
@@ -109,6 +113,7 @@ thread_init (void) {
 	lgdt (&gdt_ds);
 
 	/* Init the globla thread context */
+	load_avg = 0;
 	lock_init (&tid_lock);
 	list_init (&ready_list);
 	list_init (&sleep_list);
@@ -358,27 +363,28 @@ thread_get_priority (void) {
 void
 thread_set_nice (int nice UNUSED) {
 	/* TODO: Your implementation goes here */
+	thread_current()->nice = nice;
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	return FP2INT(load_avg * 100);
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	return FP2INT(thread_current()->recent_cpu * 100);
 }
 
 void
@@ -467,6 +473,8 @@ init_thread (struct thread *t, const char *name, int priority) {
 	list_init(&t->donors);
 	t->wait_on_lock = NULL;
 	t->magic = THREAD_MAGIC;
+	t->recent_cpu = 0;
+	t->nice = 0;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -583,7 +591,7 @@ thread_launch (struct thread *th) {
  * This function modify current thread's status to status and then
  * finds another thread to run and switches to it.
  * It's not safe to call printf() in the schedule(). */
-void
+static void
 do_schedule(int status) {
 	ASSERT (intr_get_level () == INTR_OFF);
 	ASSERT (thread_current()->status == THREAD_RUNNING);
@@ -669,4 +677,39 @@ priority_nested_update(struct thread* thr) {
 			}
 		}
 	} 
+}
+
+static void
+thread_for_each (void (*action)(struct thread *)) {
+	struct list_elem *e;
+	 for (e = list_begin (&ready_list); e != list_end (&ready_list);
+			 e = list_next (e)) {
+		 struct thread *t = list_entry (e, struct thread, elem);
+		 action (t);
+	 }
+	 for (e = list_begin (&sleep_list); e != list_end (&sleep_list);
+			 e = list_next (e)) {
+		 struct thread *t = list_entry (e, struct thread, elem);
+		 action (t);
+	 }
+	 if (thread_current () != idle_thread) {
+		 action (thread_current ());
+	 }
+}
+
+static void update_recent_cpu(struct thread* thr) {
+	thr->recent_cpu = DIV(MUL(2 * load_avg, thr->recent_cpu), 2 * load_avg + FP(1)) + FP(thr->nice);
+}
+
+static void update_thread_priority(struct thread *thr) {
+	thr->priority = PRI_MAX - FP2INT(thr->recent_cpu / 4) - thr->nice * 2;
+}
+
+void update_after_one_second() {
+	load_avg = 59 * load_avg / 60 + FP(list_size(&ready_list) + (thread_current() != idle_thread)) / 60;
+	thread_for_each(update_recent_cpu);
+}
+
+void update_after_four_ticks() {
+	thread_for_each(update_thread_priority);
 }

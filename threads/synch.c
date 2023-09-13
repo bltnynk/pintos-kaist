@@ -195,7 +195,7 @@ lock_acquire (struct lock *lock) {
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
 
-	if (lock->semaphore.value == 0) {
+	if (!thread_mlfqs && lock->semaphore.value == 0) {
 		struct thread* cur_thread = thread_current();
 		cur_thread->wait_on_lock = lock;
 		int current_priority = cur_thread->priority;
@@ -239,22 +239,24 @@ lock_release (struct lock *lock) {
 
 	lock->holder = NULL;
 	
-	struct thread *cur_thread = thread_current();
-	int priority = -1;
-	for (struct list_elem * e = list_begin (&cur_thread->donors); e != list_end (&cur_thread->donors); e = list_next (e)) {
-		struct thread *donor_thread = list_entry (e, struct thread, donor_elem);
-		if (donor_thread->wait_on_lock == lock) {
-			list_remove(&donor_thread->donor_elem);
+	if (!thread_mlfqs) {
+		struct thread *cur_thread = thread_current();
+		int priority = -1;
+		for (struct list_elem * e = list_begin (&cur_thread->donors); e != list_end (&cur_thread->donors); e = list_next (e)) {
+			struct thread *donor_thread = list_entry (e, struct thread, donor_elem);
+			if (donor_thread->wait_on_lock == lock) {
+				list_remove(&donor_thread->donor_elem);
+			}
+			else if (donor_thread->priority > priority) {
+				priority = donor_thread->priority;
+			}
 		}
-		else if (donor_thread->priority > priority) {
-			priority = donor_thread->priority;
+		if (priority == -1) {
+			priority = cur_thread->original_priority;
 		}
+		cur_thread->priority = priority;
+		priority_nested_update(cur_thread);
 	}
-	if (priority == -1) {
-		priority = cur_thread->original_priority;
-	}
-	cur_thread->priority = priority;
-	priority_nested_update(cur_thread);
 	sema_up (&lock->semaphore);
 }
 

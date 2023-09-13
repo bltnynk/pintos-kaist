@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "fixed-point.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -97,7 +98,9 @@ struct thread {
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
-	struct list_elem donor_elem;              /* List element. */
+	struct list_elem donor_elem;        /* Donoation list element. */
+	FP recent_cpu;
+	int nice;
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -122,6 +125,9 @@ extern struct list ready_list;
 
 /* List of processes in THREAD_BLOCKED state */
 extern struct list sleep_list;
+
+/* Load average */
+extern FP load_avg;
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -162,6 +168,7 @@ void threads_timer_wakeup(void);
 bool thread_cmp_priority(const struct list_elem *a, const struct list_elem *b);
 
 void do_iret (struct intr_frame *tf);
-void do_schedule(int status);
+void update_after_one_second();
+void update_after_four_ticks();
 
 #endif /* threads/thread.h */

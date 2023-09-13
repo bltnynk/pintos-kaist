@@ -130,10 +130,21 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
-	int64_t cur_ticks = timer_ticks();
 
 	if (!list_empty(&sleep_list)) {
 		threads_timer_wakeup();
+	}
+
+	if (thread_mlfqs) {
+		if (ticks % TIMER_FREQ == 0) {
+			update_after_one_second();
+		}
+		struct thread *trash = thread_current();
+		thread_current()->recent_cpu += FP(1);
+
+		if (ticks % 4 == 0) {
+			update_after_four_ticks();
+		}
 	}
 }
 
@@ -193,3 +204,4 @@ real_time_sleep (int64_t num, int32_t denom) {
 		busy_wait (loops_per_tick * num / 1000 * TIMER_FREQ / (denom / 1000));
 	}
 }
+

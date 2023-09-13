@@ -31,6 +31,7 @@
 #include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include <list.h>
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
@@ -197,7 +198,7 @@ lock_acquire (struct lock *lock) {
 	if (lock->semaphore.value == 0) {
 		struct thread* cur_thread = thread_current();
 		cur_thread->wait_on_lock = lock;
-		int current_priority = thread_get_priority();
+		int current_priority = cur_thread->priority;
 		struct thread * lock_thread = lock->holder;
 		list_push_back(&lock_thread->donors, &cur_thread->donor_elem);
 		priority_nested_update(cur_thread);
@@ -303,6 +304,15 @@ cond_init (struct condition *cond) {
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
+static bool
+sema_cmp_priority(const struct list_elem *a, const struct list_elem *b) {
+	struct semaphore *sem_a = &list_entry (a, struct semaphore_elem, elem)->semaphore;
+	struct semaphore *sem_b = &list_entry (b, struct semaphore_elem, elem)->semaphore;
+	struct thread *thread_a = list_entry (list_begin (&sem_a->waiters), struct thread, elem);
+	struct thread *thread_b = list_entry (list_begin (&sem_b->waiters), struct thread, elem);
+	return thread_a->priority > thread_b->priority;
+}
+
 void
 cond_wait (struct condition *cond, struct lock *lock) {
 	struct semaphore_elem waiter;
@@ -313,8 +323,8 @@ cond_wait (struct condition *cond, struct lock *lock) {
 	ASSERT (lock_held_by_current_thread (lock));
 
 	sema_init (&waiter.semaphore, 0);
-	list_insert_ordered(&cond->waiters, &waiter.elem, thread_cmp_priority, NULL);
 	lock_release (lock);
+	list_push_back(&cond->waiters, &waiter.elem);
 	sema_down (&waiter.semaphore);
 	lock_acquire (lock);
 }
@@ -333,7 +343,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED) {
 	ASSERT (!intr_context ());
 	ASSERT (lock_held_by_current_thread (lock));
 
-	list_sort(&cond->waiters, thread_cmp_priority, NULL);
+	list_sort(&cond->waiters, sema_cmp_priority, NULL);
 	if (!list_empty (&cond->waiters))
 		sema_up (&list_entry (list_pop_front (&cond->waiters),
 					struct semaphore_elem, elem)->semaphore);

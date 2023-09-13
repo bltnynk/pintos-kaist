@@ -17,6 +17,7 @@ endif
 TIMEOUT = 60
 MEMORY = 20
 SWAP_DISK = 4
+SEED = 
 
 clean::
 	rm -f $(OUTPUTS) $(ERRORS) $(RESULTS) 
@@ -63,7 +64,10 @@ endif
 ifeq ($(filter vm, $(KERNEL_SUBDIRS)), vm)
 TESTCMD += --swap-disk=$(SWAP_DISK)
 endif
-TESTCMD += -- -q 
+TESTCMD += -- -q
+ifdef SEED
+TESTCMD += -rs=$(SEED)
+endif
 TESTCMD += $(KERNELFLAGS)
 ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)
 TESTCMD += -f

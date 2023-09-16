@@ -17,7 +17,7 @@ endif
 TIMEOUT = 60
 MEMORY = 20
 SWAP_DISK = 4
-SEED = 723462
+SEED = 
 
 clean::
 	rm -f $(OUTPUTS) $(ERRORS) $(RESULTS) 

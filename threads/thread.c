@@ -10,11 +10,12 @@
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#include "devices/timer.h"
-#include "intrinsic.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #endif
+#include "devices/timer.h"
+#include "intrinsic.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -115,6 +116,7 @@ thread_init (void) {
 	/* Init the globla thread context */
 	load_avg = 0;
 	lock_init (&tid_lock);
+	lock_init (&filesys_lock);
 	list_init (&ready_list);
 	list_init (&sleep_list);
 	list_init (&destruction_req);
@@ -212,6 +214,12 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
+#ifdef USERPROG
+	struct thread *cur_thread = thread_current();
+	t->parent = cur_thread;
+	list_push_back(&cur_thread->children, &t->child_elem);
+#endif
+
 
 	/* Add to run queue. */
 	thread_unblock (t);
@@ -475,6 +483,14 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->magic = THREAD_MAGIC;
 	t->recent_cpu = 0;
 	t->nice = 0;
+#ifdef USERPROG
+	list_init(&t->children);
+	sema_init(&t->fork_sema, 0);
+	sema_init(&t->wait_sema, 0);
+	sema_init(&t->exit_sema, 0);
+	t->next_fd = 2;
+	list_init(&t->fdt);
+#endif
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

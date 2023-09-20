@@ -68,6 +68,7 @@ static __inline int64_t syscall (uint64_t num_, uint64_t a1_, uint64_t a2_,
 			((uint64_t) ARG3), \
 			((uint64_t) ARG4), \
 			0))
+
 void
 halt (void) {
 	syscall0 (SYS_HALT);

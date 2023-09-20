@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #include "fixed-point.h"
 #ifdef VM
 #include "vm/vm.h"
@@ -28,6 +29,7 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+#define FDT_MAX 128
 
 /* A kernel thread or user process.
  *
@@ -105,6 +107,17 @@ struct thread {
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
+	struct intr_frame parent_if;
+	struct thread *parent;
+	struct list children;
+	struct list_elem child_elem;
+	int exit_status;
+	struct semaphore fork_sema;
+	struct semaphore wait_sema;
+	struct semaphore exit_sema;
+	struct list fdt;
+	int next_fd;
+	struct file *running_file;
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */

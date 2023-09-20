@@ -26,6 +26,7 @@ static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
+static void argument_stack(int argc, char *argv[], void **stack_ptr);
 
 /* General process initializer for initd and other process. */
 static void
@@ -49,6 +50,10 @@ process_create_initd (const char *file_name) {
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
+
+	/* Parse fn_copy to binray's name and args */
+	char *save_ptr;
+	strtok_r(file_name, " ", &save_ptr);
 
 	/* Create a new thread to execute FILE_NAME. */
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
@@ -158,12 +163,40 @@ error:
 	thread_exit ();
 }
 
+/* Set up stack for starting new process */
+static void
+argument_stack(int argc, char *argv[], void **stack_ptr) {
+	char **esp = stack_ptr;
+	int i;
+	int arg_size;
+	char *argv_addr[64];
+
+	for (i = argc - 1; i >= 0; --i) {
+		arg_size = strlen(argv[i]) + 1;
+		*esp -= arg_size;
+		memcpy(*esp, argv[i], arg_size);
+		argv_addr[argc] = *esp;
+	}
+	*esp = (char *)((uintptr_t)(*esp) & ~7) - sizeof(void *);
+	memcpy(*esp, 0, sizeof(void *));
+
+	for (i = argc - 1; i >= 0; --i) {
+		*esp -= sizeof(void *);
+		memcpy(*esp, &argv_addr[i], arg_size);
+	}
+	*esp -= sizeof(void *);
+	memcpy(*esp, 0, sizeof(void *));
+}
+
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
+	char *token, *save_ptr;
+	int argc = 0;
+	char *argv[64];
 
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
@@ -176,6 +209,11 @@ process_exec (void *f_name) {
 	/* We first kill the current context */
 	process_cleanup ();
 
+	/* Parse the command line */
+	for (token = strtok_r(file_name, " ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr)) {
+		argv[argc++] = token;
+	}
+
 	/* And then load the binary */
 	success = load (file_name, &_if);
 
@@ -183,6 +221,16 @@ process_exec (void *f_name) {
 	palloc_free_page (file_name);
 	if (!success)
 		return -1;
+
+	/* Set up dummy intr_frame (so iret yields desired behaviour)*/
+	argument_stack(argc, argv, &_if.rsp);
+
+	/* Put the arguments to registers (argc to rdi and argv to rsi)*/
+	_if.rsp -= sizeof(void *);
+	_if.R.rdi = argc;
+	_if.R.rsi = _if.rsp + sizeof(void *);
+
+	hex_dump(_if.rsp, _if.rsp, LOADER_PHYS_BASE - _if.rsp, true);
 
 	/* Start switched process. */
 	do_iret (&_if);
@@ -204,6 +252,7 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	while (1);
 	return -1;
 }
 

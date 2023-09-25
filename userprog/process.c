@@ -175,17 +175,20 @@ argument_stack(int argc, char *argv[], void **stack_ptr) {
 		arg_size = strlen(argv[i]) + 1;
 		*esp -= arg_size;
 		memcpy(*esp, argv[i], arg_size);
-		argv_addr[argc] = *esp;
+		argv_addr[i] = *esp;
 	}
 	*esp = (char *)((uintptr_t)(*esp) & ~7) - sizeof(void *);
-	memcpy(*esp, 0, sizeof(void *));
+	memset(*esp, 0, sizeof(void *));
+
+	*esp -= sizeof(void *);
+	memset(*esp, 0, sizeof(void *));
 
 	for (i = argc - 1; i >= 0; --i) {
 		*esp -= sizeof(void *);
-		memcpy(*esp, &argv_addr[i], arg_size);
+		memcpy(*esp, &argv_addr[i], sizeof(void *));
 	}
 	*esp -= sizeof(void *);
-	memcpy(*esp, 0, sizeof(void *));
+	memset(*esp, 0, sizeof(void *));
 }
 
 /* Switch the current execution context to the f_name.
@@ -217,20 +220,17 @@ process_exec (void *f_name) {
 	/* And then load the binary */
 	success = load (file_name, &_if);
 
-	/* If load failed, quit. */
-	palloc_free_page (file_name);
-	if (!success)
-		return -1;
-
 	/* Set up dummy intr_frame (so iret yields desired behaviour)*/
 	argument_stack(argc, argv, &_if.rsp);
 
 	/* Put the arguments to registers (argc to rdi and argv to rsi)*/
-	_if.rsp -= sizeof(void *);
 	_if.R.rdi = argc;
 	_if.R.rsi = _if.rsp + sizeof(void *);
 
-	hex_dump(_if.rsp, _if.rsp, LOADER_PHYS_BASE - _if.rsp, true);
+	/* If load failed, quit. */
+	palloc_free_page (file_name);
+	if (!success)
+		return -1;
 
 	/* Start switched process. */
 	do_iret (&_if);

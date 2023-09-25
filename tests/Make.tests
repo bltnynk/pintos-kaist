@@ -17,7 +17,6 @@ endif
 TIMEOUT = 60
 MEMORY = 20
 SWAP_DISK = 4
-SEED = 
 
 clean::
 	rm -f $(OUTPUTS) $(ERRORS) $(RESULTS) 
@@ -55,6 +54,9 @@ $(foreach test,$(TESTS),$(eval $(test).output: TEST = $(test)))
 VERBOSE =
 
 TESTCMD = pintos -v -k -T $(TIMEOUT) -m $(MEMORY)
+ifdef DEBUG
+TESTCMD += --gdb
+endif
 TESTCMD += $(SIMULATOR)
 TESTCMD += $(PINTOSOPTS)
 ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)

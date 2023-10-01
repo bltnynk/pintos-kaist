@@ -212,6 +212,12 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
+#ifdef USERPROG
+	struct thread *cur_thread = thread_current();
+	t->parent = cur_thread;
+	list_push_back(&cur_thread->children, &t->child_elem);
+#endif
+
 
 	/* Add to run queue. */
 	thread_unblock (t);
@@ -475,6 +481,9 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->magic = THREAD_MAGIC;
 	t->recent_cpu = 0;
 	t->nice = 0;
+	list_init(&t->children);
+	sema_init(&t->fork_sema, 0);
+	sema_init(&t->wait_sema, 0);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

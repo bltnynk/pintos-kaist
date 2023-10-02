@@ -232,6 +232,8 @@ process_exec (void *f_name) {
 
 	/* We first kill the current context */
 	process_cleanup ();
+	bool cec = is_user_vaddr(NULL);
+	
 
 	/* Parse the command line */
 	for (token = strtok_r(file_name, " ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr)) {
@@ -251,7 +253,6 @@ process_exec (void *f_name) {
 	/* Put the arguments to registers (argc to rdi and argv to rsi)*/
 	_if.R.rdi = argc;
 	_if.R.rsi = _if.rsp + sizeof(void *);
-	hex_dump(_if.rsp, _if.rsp, KERN_BASE - _if.rsp, true);
 
 	/* Start switched process. */
 	do_iret (&_if);
@@ -295,11 +296,23 @@ process_wait (tid_t child_tid) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
+	struct thread *child_thread = NULL;
 	/* TODO: Your code goes here.
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-
+	
+	for (int i = 0; i < 64; ++i) {
+		struct file *cur_file = curr->fdt[i];
+		file_close(cur_file);
+		free(cur_file);
+	}
+	for (struct list_elem *e = list_begin (&curr->children); e != list_end (&curr->children); e = list_next (e)) {
+		child_thread = list_entry(e, struct thread, child_elem);
+		if (child_thread->parent == curr) {
+			child_thread->parent = NULL;
+		}
+	}
 	process_cleanup ();
 	sema_up(&curr->wait_sema);
 }

@@ -113,6 +113,8 @@ struct thread {
 	int exit_status;
 	struct semaphore fork_sema;
 	struct semaphore wait_sema;
+	struct file *fdt[64];
+	int next_fd;
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */

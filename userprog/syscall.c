@@ -9,6 +9,9 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 #include "filesys/filesys.h"
+#include "filesys/file.h"
+#include "devices/input.h"
+#include "kernel/stdio.h"
 #include "intrinsic.h"
 
 typedef int pid_t;
@@ -73,10 +76,10 @@ syscall_init (void) {
 // }
 
 static void check_vaddr (void *vaddr) {
-	if (!is_user_vaddr(vaddr)) {
+	if (!vaddr || !is_user_vaddr(vaddr)) {
 		sys_exit(-1);
 	}
-}	
+}
 
 static void
 sys_halt (void) {
@@ -138,38 +141,132 @@ sys_wait (pid_t pid) {
 
 static bool
 sys_create (const char *file, unsigned initial_size) {
+	check_vaddr(file);
+	lock_acquire(&filesys_lock);
+	bool ret = filesys_create(file, initial_size);
+	lock_release(&filesys_lock);
+	return ret;
 }
 
 static bool
 sys_remove (const char *file) {
+	check_vaddr(file);
+	lock_acquire(&filesys_lock);
+	bool ret = filesys_remove(file);
+	lock_release(&filesys_lock);
+	return ret;
 }
 
 static int
 sys_open (const char *file) {
+	check_vaddr(file);
+	struct thread * cur_thread = thread_current();
+	lock_acquire(&filesys_lock);
+	struct file *file_ptr = filesys_open(file);
+	lock_release(&filesys_lock);
+	if (!file_ptr) {
+		return -1;
+	}
+	int file_fd = cur_thread->next_fd;
+	cur_thread->fdt[file_fd] = file_ptr;
+	while (cur_thread->fdt[cur_thread->next_fd]) {
+		++cur_thread->next_fd;
+	}
+	return file_fd;
 }
 
 static int
 sys_filesize (int fd) {
+	struct thread * cur_thread = thread_current();
+	struct file *file_ptr = cur_thread->fdt[fd];
+	int ret = file_ptr ? file_length(file_ptr) : -1;
+	return ret;
 }
 
 static int
 sys_read (int fd, void *buffer, unsigned size) {
+	check_vaddr(buffer);
+	int cnt = 0;
+	if (fd == 0) {
+		lock_acquire(&filesys_lock);
+		cnt = input_getc();
+		lock_release(&filesys_lock);
+		return cnt;
+	}
+	if (fd == 1) {
+		return -1;
+	}
+	struct thread * cur_thread = thread_current();
+	struct file *file_ptr = cur_thread->fdt[fd];
+	if (!file_ptr) {
+		return -1;
+	}
+	lock_acquire(&filesys_lock);
+	cnt = file_read(file_ptr, buffer, size);
+	lock_release(&filesys_lock);
+	return cnt;
 }
 
 static int
 sys_write (int fd, const void *buffer, unsigned size) {
+	check_vaddr(buffer);
+	int cnt = 0;
+	if (fd == 0) {
+		return -1;
+	}
+	if (fd == 1) {
+		lock_acquire(&filesys_lock);
+		putbuf(buffer, size);
+		lock_release(&filesys_lock);
+		return size;
+	}
+	struct thread *cur_thread = thread_current();
+	struct file *file_ptr = cur_thread->fdt[fd];
+	if (!file_ptr) {
+		return -1;
+	}
+	lock_acquire(&filesys_lock);
+	cnt = file_write(file_ptr, buffer, size);
+	lock_release(&filesys_lock);
+	return cnt;
 }
 
 static void
 sys_seek (int fd, unsigned position) {
+	struct thread *cur_thread = thread_current();
+	struct file *file_ptr = cur_thread->fdt[fd];
+	if (!file_ptr) {
+		return;
+	}
+	lock_acquire(&filesys_lock);
+	file_seek(file_ptr, position);
+	lock_release(&filesys_lock);
 }
 
 static unsigned
 sys_tell (int fd) {
+	struct thread *cur_thread = thread_current();
+	struct file *file_ptr = cur_thread->fdt[fd];
+	int cnt = 0;
+	if (!file_ptr) {
+		sys_exit(-1);
+	}
+	cnt = file_tell(file_ptr);
+	return cnt;
 }
 
 static void
 sys_close (int fd) {
+	struct thread *cur_thread = thread_current();
+	struct file *file_ptr = cur_thread->fdt[fd];
+	if (!file_ptr) {
+		sys_exit(-1);
+	}
+	lock_acquire(&filesys_lock);
+	file_close(file_ptr);
+	lock_release(&filesys_lock);
+	cur_thread->fdt[fd] = NULL;
+	free(file_ptr);
 }
 
 /* The main system call interface */

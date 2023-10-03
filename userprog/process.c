@@ -175,6 +175,13 @@ __do_fork (void *aux) {
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
 
+	current->next_fd = parent->next_fd;
+	for (int i = 0; i < FDT_MAX; ++i) {
+		if (parent->fdt[i]) {
+			current->fdt[i] = file_duplicate(parent->fdt[i]);
+		}
+	}
+
 	process_init ();
 
 	sema_up(&current->fork_sema);
@@ -232,8 +239,6 @@ process_exec (void *f_name) {
 
 	/* We first kill the current context */
 	process_cleanup ();
-	bool cec = is_user_vaddr(NULL);
-	
 
 	/* Parse the command line */
 	for (token = strtok_r(file_name, " ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr)) {
@@ -285,6 +290,7 @@ process_wait (tid_t child_tid) {
 			sema_down(&child_thread->wait_sema);
 			list_remove(&child_thread->child_elem);
 			child_status = child_thread->exit_status;
+			sema_up(&child_thread->exit_sema);
 			break;
 		}
 	}
@@ -302,10 +308,12 @@ process_exit (void) {
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 	
-	for (int i = 0; i < 64; ++i) {
+	file_close(curr->running_file);
+	curr->running_file = NULL;
+
+	for (int i = 0; i < FDT_MAX; ++i) {
 		struct file *cur_file = curr->fdt[i];
 		file_close(cur_file);
-		free(cur_file);
 	}
 	for (struct list_elem *e = list_begin (&curr->children); e != list_end (&curr->children); e = list_next (e)) {
 		child_thread = list_entry(e, struct thread, child_elem);
@@ -315,6 +323,7 @@ process_exit (void) {
 	}
 	process_cleanup ();
 	sema_up(&curr->wait_sema);
+	sema_down(&curr->exit_sema);
 }
 
 /* Free the current process's resources. */
@@ -434,11 +443,15 @@ load (const char *file_name, struct intr_frame *if_) {
 	process_activate (thread_current ());
 
 	/* Open executable file. */
+	lock_acquire(&filesys_lock);
 	file = filesys_open (file_name);
+	lock_release(&filesys_lock);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
+	t->running_file = file;
+	file_deny_write(file);
 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -519,7 +532,9 @@ load (const char *file_name, struct intr_frame *if_) {
 
 done:
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	if (file != t->running_file) {
+		file_close (file);
+	}
 	return success;
 }
 

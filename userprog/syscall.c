@@ -18,7 +18,6 @@ typedef int pid_t;
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
-static void sys_exit(int status);
 
 /* System call.
  *
@@ -86,7 +85,7 @@ sys_halt (void) {
 	power_off();
 }
 
-static void
+void
 sys_exit (int status) {
 	struct thread *t = thread_current();
 	t->exit_status = status;
@@ -127,7 +126,10 @@ sys_fork (const char *thread_name){
 static int
 sys_exec (const char *file) {
 	check_vaddr(file);
-	int ret = process_exec(file);
+	char *file_copy = malloc(strlen(file) + 1);
+	strlcpy(file_copy, file, strlen(file) + 1);
+	int ret = process_exec(file_copy);
+	free(file_copy);
 	if (ret == -1) {
 		sys_exit(ret);
 	}
@@ -166,6 +168,9 @@ sys_open (const char *file) {
 	lock_release(&filesys_lock);
 	if (!file_ptr) {
 		return -1;
+	}
+	if (!strcmp(file, cur_thread->name)) {
+		file_deny_write(file_ptr);
 	}
 	int file_fd = cur_thread->next_fd;
 	cur_thread->fdt[file_fd] = file_ptr;
@@ -266,7 +271,9 @@ sys_close (int fd) {
 	file_close(file_ptr);
 	lock_release(&filesys_lock);
 	cur_thread->fdt[fd] = NULL;
-	free(file_ptr);
+	if (fd < cur_thread->next_fd) {
+		cur_thread->next_fd = fd;
+	}
 }
 
 /* The main system call interface */

@@ -1,9 +1,10 @@
-#include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
-#include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/exception.h"
+#include "userprog/gdt.h"
+#include "userprog/syscall.h"
 #include "intrinsic.h"
 
 /* Number of page faults processed. */
@@ -146,6 +147,7 @@ page_fault (struct intr_frame *f) {
 		return;
 #endif
 
+	sys_exit(-1);
 	/* Count page faults. */
 	page_fault_cnt++;
 

@@ -218,7 +218,6 @@ thread_create (const char *name, int priority,
 	struct thread *cur_thread = thread_current();
 	t->parent = cur_thread;
 	list_push_back(&cur_thread->children, &t->child_elem);
-	t->next_fd = 2;
 #endif
 
 
@@ -489,6 +488,8 @@ init_thread (struct thread *t, const char *name, int priority) {
 	sema_init(&t->fork_sema, 0);
 	sema_init(&t->wait_sema, 0);
 	sema_init(&t->exit_sema, 0);
+	t->next_fd = 2;
+	list_init(&t->fdt);
 #endif
 }
 

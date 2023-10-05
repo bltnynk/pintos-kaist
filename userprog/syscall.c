@@ -32,6 +32,18 @@ void syscall_handler (struct intr_frame *);
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
 
+static struct file *fd_to_file(int fd) {
+	struct list_elem *e;
+	struct thread *cur_thread = thread_current();
+	for (e = list_begin(&cur_thread->fdt); e != list_end(&cur_thread->fdt); e=list_next(e)) {
+		struct fd_elem *tmp = list_entry(e, struct fd_elem, elem);
+		if (fd == tmp->fd) {
+			return tmp->file_ptr;
+		}
+	}
+	return NULL;
+}
+
 void
 syscall_init (void) {
 	write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48  |
@@ -172,18 +184,17 @@ sys_open (const char *file) {
 	if (!strcmp(file, cur_thread->name)) {
 		file_deny_write(file_ptr);
 	}
-	int file_fd = cur_thread->next_fd;
-	cur_thread->fdt[file_fd] = file_ptr;
-	while (cur_thread->fdt[cur_thread->next_fd]) {
-		++cur_thread->next_fd;
-	}
-	return file_fd;
+	struct fd_elem *file_elem = (struct fd_elem *)malloc(sizeof (struct fd_elem));
+	file_elem->fd = cur_thread->next_fd++;
+	file_elem->file_ptr = file_ptr;
+	list_push_back(&cur_thread->fdt, &file_elem->elem);
+	return file_elem->fd;
 }
 
 static int
 sys_filesize (int fd) {
 	struct thread * cur_thread = thread_current();
-	struct file *file_ptr = cur_thread->fdt[fd];
+	struct file *file_ptr = fd_to_file(fd);
 	int ret = file_ptr ? file_length(file_ptr) : -1;
 	return ret;
 }
@@ -202,7 +213,7 @@ sys_read (int fd, void *buffer, unsigned size) {
 		return -1;
 	}
 	struct thread * cur_thread = thread_current();
-	struct file *file_ptr = cur_thread->fdt[fd];
+	struct file *file_ptr = fd_to_file(fd);
 	if (!file_ptr) {
 		return -1;
 	}
@@ -226,7 +237,7 @@ sys_write (int fd, const void *buffer, unsigned size) {
 		return size;
 	}
 	struct thread *cur_thread = thread_current();
-	struct file *file_ptr = cur_thread->fdt[fd];
+	struct file *file_ptr = fd_to_file(fd);
 	if (!file_ptr) {
 		return -1;
 	}
@@ -239,7 +250,7 @@ sys_write (int fd, const void *buffer, unsigned size) {
 static void
 sys_seek (int fd, unsigned position) {
 	struct thread *cur_thread = thread_current();
-	struct file *file_ptr = cur_thread->fdt[fd];
+	struct file *file_ptr = fd_to_file(fd);
 	if (!file_ptr) {
 		return;
 	}
@@ -251,7 +262,7 @@ sys_seek (int fd, unsigned position) {
 static unsigned
 sys_tell (int fd) {
 	struct thread *cur_thread = thread_current();
-	struct file *file_ptr = cur_thread->fdt[fd];
+	struct file *file_ptr = fd_to_file(fd);
 	int cnt = 0;
 	if (!file_ptr) {
 		sys_exit(-1);
@@ -263,17 +274,22 @@ sys_tell (int fd) {
 static void
 sys_close (int fd) {
 	struct thread *cur_thread = thread_current();
-	struct file *file_ptr = cur_thread->fdt[fd];
-	if (!file_ptr) {
+	struct list_elem *e;
+	struct fd_elem *file_elem;
+	for (e = list_begin(&cur_thread->fdt); e != list_end(&cur_thread->fdt); e = list_next(e)) {
+		file_elem = list_entry(e, struct fd_elem, elem);
+		if (fd == file_elem->fd) {
+			break;
+		}
+	}
+	if (e == list_end(&cur_thread->fdt)) {
 		sys_exit(-1);
 	}
+	list_remove(e);
 	lock_acquire(&filesys_lock);
-	file_close(file_ptr);
+	file_close(file_elem->file_ptr);
 	lock_release(&filesys_lock);
-	cur_thread->fdt[fd] = NULL;
-	if (fd < cur_thread->next_fd) {
-		cur_thread->next_fd = fd;
-	}
+	free(file_elem);
 }
 
 /* The main system call interface */

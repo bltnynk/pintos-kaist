@@ -115,7 +115,7 @@ struct thread {
 	struct semaphore fork_sema;
 	struct semaphore wait_sema;
 	struct semaphore exit_sema;
-	struct file *fdt[FDT_MAX];
+	struct list fdt;
 	int next_fd;
 	struct file *running_file;
 #endif

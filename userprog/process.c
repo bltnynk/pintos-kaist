@@ -176,10 +176,20 @@ __do_fork (void *aux) {
 	 * TODO:       the resources of parent.*/
 
 	current->next_fd = parent->next_fd;
-	for (int i = 0; i < FDT_MAX; ++i) {
-		if (parent->fdt[i]) {
-			current->fdt[i] = file_duplicate(parent->fdt[i]);
-		}
+	for (struct list_elem *e = list_begin(&parent->fdt);
+			e != list_end(&parent->fdt); e = list_next(e)) {
+		struct fd_elem *tmp = list_entry(e, struct fd_elem, elem);
+		struct file *dup_file = file_duplicate(tmp->file_ptr);
+		if (dup_file == NULL)
+			goto error;
+		
+		struct fd_elem *dup = (struct fd_elem *) malloc(sizeof(struct fd_elem));
+		if (dup == NULL)
+			goto error;
+
+		dup->file_ptr = dup_file;
+		dup->fd = tmp->fd;
+		list_push_back(&current->fdt, &dup->elem);
 	}
 
 	process_init ();
@@ -310,20 +320,23 @@ process_exit (void) {
 	
 	file_close(curr->running_file);
 	curr->running_file = NULL;
-
-	for (int i = 0; i < FDT_MAX; ++i) {
-		struct file *cur_file = curr->fdt[i];
-		file_close(cur_file);
+	while (!list_empty (&curr->fdt)) {
+		struct list_elem *e = list_pop_front(&curr->fdt);
+		struct fd_elem *tmp = list_entry(e, struct fd_elem, elem);
+		struct file *file_ptr = tmp->file_ptr;
+		file_close(file_ptr);
+		free(tmp);
 	}
+
 	for (struct list_elem *e = list_begin (&curr->children); e != list_end (&curr->children); e = list_next (e)) {
 		child_thread = list_entry(e, struct thread, child_elem);
 		if (child_thread->parent == curr) {
 			child_thread->parent = NULL;
 		}
 	}
-	process_cleanup ();
 	sema_up(&curr->wait_sema);
 	sema_down(&curr->exit_sema);
+	process_cleanup ();
 }
 
 /* Free the current process's resources. */

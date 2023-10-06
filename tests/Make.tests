@@ -54,6 +54,9 @@ $(foreach test,$(TESTS),$(eval $(test).output: TEST = $(test)))
 VERBOSE =
 
 TESTCMD = pintos -v -k -T $(TIMEOUT) -m $(MEMORY)
+ifdef DEBUG
+TESTCMD += --gdb
+endif
 TESTCMD += $(SIMULATOR)
 TESTCMD += $(PINTOSOPTS)
 ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)
@@ -63,7 +66,10 @@ endif
 ifeq ($(filter vm, $(KERNEL_SUBDIRS)), vm)
 TESTCMD += --swap-disk=$(SWAP_DISK)
 endif
-TESTCMD += -- -q 
+TESTCMD += -- -q
+ifdef SEED
+TESTCMD += -rs=$(SEED)
+endif
 TESTCMD += $(KERNELFLAGS)
 ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)
 TESTCMD += -f

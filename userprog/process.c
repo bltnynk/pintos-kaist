@@ -139,6 +139,19 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 }
 #endif
 
+static void fdt_cleanup() {
+	struct thread *current = thread_current();
+	file_close(current->running_file);
+	current->running_file = NULL;
+	while (!list_empty (&current->fdt)) {
+		struct list_elem *e = list_pop_front(&current->fdt);
+		struct fd_elem *tmp = list_entry(e, struct fd_elem, elem);
+		struct file *file_ptr = tmp->file_ptr;
+		file_close(file_ptr);
+		free(tmp);
+	}
+}
+
 /* A thread function that copies parent's execution context.
  * Hint) parent->tf does not hold the userland context of the process.
  *       That is, you are required to pass second argument of process_fork to
@@ -200,6 +213,8 @@ __do_fork (void *aux) {
 	do_iret (&if_);
 error:
 	current->exit_status = TID_ERROR;
+	// Put this here to prevent bugs for multi-oom, needs to cleanup before fork returns.
+	fdt_cleanup();
 	sema_up(&current->fork_sema);
 	thread_exit ();
 }
@@ -318,15 +333,7 @@ process_exit (void) {
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 	
-	file_close(curr->running_file);
-	curr->running_file = NULL;
-	while (!list_empty (&curr->fdt)) {
-		struct list_elem *e = list_pop_front(&curr->fdt);
-		struct fd_elem *tmp = list_entry(e, struct fd_elem, elem);
-		struct file *file_ptr = tmp->file_ptr;
-		file_close(file_ptr);
-		free(tmp);
-	}
+	fdt_cleanup();
 
 	for (struct list_elem *e = list_begin (&curr->children); e != list_end (&curr->children); e = list_next (e)) {
 		child_thread = list_entry(e, struct thread, child_elem);

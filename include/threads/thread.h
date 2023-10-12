@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include "threads/interrupt.h"
 #include "threads/synch.h"
-#include "fixed-point.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -101,7 +100,7 @@ struct thread {
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 	struct list_elem donor_elem;        /* Donoation list element. */
-	FP recent_cpu;
+	int recent_cpu;
 	int nice;
 
 #ifdef USERPROG
@@ -139,9 +138,6 @@ extern struct list ready_list;
 /* List of processes in THREAD_BLOCKED state */
 extern struct list sleep_list;
 
-/* Load average */
-extern FP load_avg;
-
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
@@ -170,18 +166,23 @@ void thread_sleep(int64_t end_ticks);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
-void priority_nested_update(struct thread *thr);
+void update_nested_priority(bool);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
+
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-void threads_timer_wakeup(void);
+void threads_timer_wakeup();
 bool thread_cmp_priority(const struct list_elem *a, const struct list_elem *b);
 
 void do_iret (struct intr_frame *tf);
-void update_after_one_second();
-void update_after_four_ticks();
+void update_next_wakeup(int64_t ticks);
+int64_t get_next_wakeup();
+bool test_priority ();
+void increase_curr_recent_cpu ();
+void calc_recent_cpu_all();
+void calc_priority_all();
 
 #endif /* threads/thread.h */

@@ -130,20 +130,24 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
-
-	if (!list_empty(&sleep_list)) {
-		threads_timer_wakeup();
-	}
+	struct thread *cur_thread = thread_current();
 
 	if (thread_mlfqs) {
+		increase_curr_recent_cpu();
+
 		if (ticks % TIMER_FREQ == 0) {
-			update_after_one_second();
+			calc_recent_cpu_all();
 		}
-		struct thread *trash = thread_current();
-		thread_current()->recent_cpu += FP(1);
 
 		if (ticks % 4 == 0) {
-			update_after_four_ticks();
+			calc_priority_all();
+		}
+	}
+
+	if (get_next_wakeup() <= ticks) {
+		threads_timer_wakeup();
+		if (test_priority()) {
+			intr_yield_on_return();
 		}
 	}
 }

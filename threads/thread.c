@@ -235,6 +235,17 @@ thread_create (const char *name, int priority,
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 
+#ifdef USERPROG
+	t->fd_list = (struct list *) malloc(sizeof(struct list));
+	if (t->fd_list == NULL)
+		return TID_ERROR;
+
+	list_init(t->fd_list);
+
+	t->parent = thread_current();
+	list_push_back(&thread_current()->child_list, &t->child_elem);
+#endif
+
 	/* Add to run queue. */
 	thread_unblock (t);
 
@@ -476,7 +487,12 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->initial_priority = priority;
 	t->waiting_lock = NULL;
 	list_init(&t->donator_list);
-
+#ifdef USERPROG
+	list_init(&t->child_list);
+	sema_init(&t->_do_fork_sema, 0);
+	sema_init(&t->wait_status_sema, 0);
+	sema_init(&t->exit_child_sema, 0);
+#endif
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

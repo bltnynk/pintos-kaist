@@ -114,6 +114,16 @@ struct thread {
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
+	int exit_status;
+	struct list *fd_list;
+	struct list child_list;
+	struct list_elem child_elem;
+	struct intr_frame parent_if;
+	struct semaphore _do_fork_sema;
+	struct thread *parent;
+	struct file *running_file;
+	struct semaphore wait_status_sema;
+	struct semaphore exit_child_sema;
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
@@ -158,6 +168,27 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+
+void update_next_wakeup(int64_t ticks);
+int64_t get_next_wakeup(void);
+void sleep_until(int64_t ticks);
+void awake_threads(int64_t ticks);
+
+bool cmp_thread_priority (const struct list_elem *x, const struct list_elem *y, void *aux UNUSED);
+bool test_priority (void);
+
+bool cmp_donator_priority(const struct list_elem *x, const struct list_elem *y, void *aux UNUSED);
+void donate_priority(void);
+void remove_donators_for(struct lock *lock);
+void update_priority (void);
+
+void calc_priority_for (struct thread *t);
+void calc_recent_cpu_for (struct thread *t);
+void calc_load_avg (void);
+
+void increase_curr_recent_cpu (void);
+void calc_recent_cpu_all (void);
+void calc_priority_all(void);
 
 void update_next_wakeup(int64_t ticks);
 int64_t get_next_wakeup(void);

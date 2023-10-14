@@ -53,7 +53,10 @@ $(foreach test,$(TESTS),$(eval $(test).output: TEST = $(test)))
 # Prevent an environment variable VERBOSE from surprising us.
 VERBOSE =
 
-TESTCMD = pintos -v -k -T $(TIMEOUT) -m $(MEMORY)
+TESTCMD = pintos -v -k -m $(MEMORY)
+ifndef NO_TIMEOUT
+TESTCMD += -T $(TIMEOUT)
+endif
 ifdef DEBUG
 TESTCMD += --gdb
 endif

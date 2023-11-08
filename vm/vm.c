@@ -195,6 +195,7 @@ vm_get_frame (void) {
 
 	frame->page = NULL;
 	frame->kva = new;
+	frame->ref_cnt = malloc(sizeof(int));
 
 	return frame;
 }
@@ -216,7 +217,7 @@ vm_stack_growth (void *addr) {
 	}
 }
 
-static void prefault_page(struct page *page, uintptr_t rsp) {
+static void prefault_page(struct page *page) {
 	struct thread *cur_thread = thread_current();
 	int left = 0, right = 0, left_step = 1, right_step = 1;
 	void *uaddr = page->va;
@@ -268,6 +269,25 @@ static void prefault_page(struct page *page, uintptr_t rsp) {
 	}
 }
 
+static bool
+vm_copy_on_write(struct page *page) {
+	if (*(page->frame->ref_cnt) > 1) {
+		void *old_kva = page->frame->kva;
+		void *new = palloc_get_page(PAL_USER);
+		memcpy(new, old_kva, PGSIZE);
+		page->frame->kva = new;
+
+		*(page->frame->ref_cnt) = *(page->frame->ref_cnt) - 1;
+		int *ref_cnt = malloc(sizeof(int));
+		*ref_cnt = 1;
+		page->frame->ref_cnt = ref_cnt;
+	}
+	if (!pml4_set_page(page->owner->pml4, page->va, page->frame->kva, page->writable)) {
+		return false;
+	}
+	return true;
+}
+
 /* Return true on success */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
@@ -297,11 +317,15 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 		if (page->writable == 0 && write) {
 			return false;
 		}
+
+		if (!not_present && write && page->writable) {
+			return vm_copy_on_write(page);
+		}
 	
 		if (!vm_do_claim_page (page)) {
 			return false;
 		}
-		prefault_page(page, f->rsp);
+		prefault_page(page);
 		return true;
 	}
 }
@@ -319,6 +343,10 @@ vm_dealloc_page (struct page *page) {
 		lock_acquire(&victim_list_lock);
 		list_remove(&page->victim_list_elem);
 		lock_release(&victim_list_lock);
+		*(frame->ref_cnt) = *(frame->ref_cnt) - 1;
+		if (*(frame->ref_cnt) < 1) {
+			free(frame->ref_cnt);
+		}
 		free(frame);
 	} else {
 		destroy (page);
@@ -353,6 +381,7 @@ vm_do_claim_page (struct page *page) {
 
 	/* Set links */
 	frame->page = page;
+	*(frame->ref_cnt) = 1;
 	page->frame = frame;
 
 	ret = swap_in (page, frame->kva);
@@ -382,11 +411,15 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 	ASSERT(src != NULL);
 	ASSERT(dst != NULL);
 
+	struct thread *cur_thread = thread_current();
+
 	struct hash_iterator iter;
 	hash_first(&iter, &src->page_map);
 
 	bool succ = true;
 	struct page_load_info *aux_parent, *aux = NULL;
+	struct page *child_p = NULL;
+	struct frame *child_frame = NULL;
 
 	while (hash_next(&iter) != NULL) {
 		struct page *p = hash_entry(hash_cur(&iter), struct page, spt_elem);
@@ -415,60 +448,68 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 					return false;
 				}
 
-				if(!vm_claim_page(p->va)) {
-					return false;
-				}
-
-				struct page *child_p = spt_find_page(&thread_current()->spt, p->va);
-				lock_acquire(&child_p->lock);
+				child_p = spt_find_page(dst, p->va);
 
 				if (p->frame == NULL) {
 					vm_do_claim_page(p);
 				}
 
 				ASSERT (p->frame != NULL);
-				ASSERT (child_p->frame != NULL);
+				child_frame = (struct frame *)malloc(sizeof(struct frame));
+				child_frame->kva = p->frame->kva;
+				child_frame->ref_cnt = p->frame->ref_cnt;
+				*(child_frame->ref_cnt) = *(child_frame->ref_cnt) + 1;
+				child_frame->page = child_p;
+				child_p->frame = child_frame;
+				if (!pml4_set_page(cur_thread->pml4, child_p->va, child_frame->kva, false)) {
+					return false;
+				}
+				if (!pml4_set_page(p->owner->pml4, p->va, p->frame->kva, false)) {
+					return false;
+				}
+				lock_acquire(&victim_list_lock);
+				list_push_back(&victim_list, &child_p->victim_list_elem);
+				lock_release(&victim_list_lock);
+				swap_in (child_p, child_frame->kva);
 
-				memcpy(child_p->va, p->frame->kva, PGSIZE);
-				lock_release(&child_p->lock);
 				break;
 			case VM_FILE:
 				ASSERT (p->owner->pml4 != NULL);
+				bool is_dirty = pml4_is_dirty(p->owner->pml4, p->va);
 
-				if (pml4_is_dirty(p->owner->pml4, p->va)) {
-					if(!vm_alloc_page(VM_FILE, p->va, p->writable)){
-						return false;
-					}
-					
-					if(!vm_claim_page(p->va)) {
-						return false;
-					}
+				struct page_load_info *aux = (struct page_load_info *) malloc(sizeof(struct page_load_info));
+				aux->file = file_reopen(p->file.load_info.file);
+				aux->is_first_page = p->file.load_info.is_first_page;
+				aux->num_left_page = p->file.load_info.num_left_page;
+				aux->ofs = p->file.load_info.ofs;
+				aux->read_bytes = p->file.load_info.read_bytes;
+				aux->zero_bytes = p->file.load_info.zero_bytes;
 
-					struct page *child_p = spt_find_page(&thread_current()->spt, p->va);
-
-					child_p->file.load_info.file = file_reopen(p->file.load_info.file);
-					child_p->file.load_info.is_first_page = p->file.load_info.is_first_page;
-					child_p->file.load_info.num_left_page = p->file.load_info.num_left_page;
-					child_p->file.load_info.ofs = p->file.load_info.ofs;
-					child_p->file.load_info.read_bytes = p->file.load_info.read_bytes;
-					child_p->file.load_info.zero_bytes = p->file.load_info.zero_bytes;
-
-					memcpy(child_p->va, p->frame->kva, PGSIZE);
-				
-					pml4_set_dirty(&thread_current()->pml4, p->va, true);
-				} else {
-					aux = (struct page_load_info *) malloc(sizeof(struct page_load_info));
-					aux->file = file_reopen(p->file.load_info.file);
-					aux->is_first_page = p->file.load_info.is_first_page;
-					aux->num_left_page = p->file.load_info.num_left_page;
-					aux->ofs = p->file.load_info.ofs;
-					aux->read_bytes = p->file.load_info.read_bytes;
-					aux->zero_bytes = p->file.load_info.zero_bytes;
-
-					if(!vm_alloc_page_with_initializer(VM_FILE, p->va, p->writable, file_lazy_load, aux)){
-						return false;
-					}
+				if(!vm_alloc_page_with_initializer(VM_FILE, p->va, p->writable, NULL, aux)){
+					return false;
 				}
+
+				child_p = spt_find_page(dst, p->va);
+
+				ASSERT (p->frame != NULL);
+				child_frame = (struct frame *)malloc(sizeof(struct frame));
+				child_frame->kva = p->frame->kva;
+				child_frame->ref_cnt = p->frame->ref_cnt;
+				*(child_frame->ref_cnt) = *(child_frame->ref_cnt) + 1;
+				child_frame->page = child_p;
+				child_p->frame = child_frame;
+				if (!pml4_set_page(cur_thread->pml4, child_p->va, child_frame->kva, false)) {
+					return false;
+				}
+				if (!pml4_set_page(p->owner->pml4, p->va, p->frame->kva, false)) {
+					return false;
+				}
+				lock_acquire(&victim_list_lock);
+				list_push_back(&victim_list, &child_p->victim_list_elem);
+				lock_release(&victim_list_lock);
+			
+				pml4_set_dirty(cur_thread->pml4, p->va, is_dirty);
+				swap_in (child_p, child_frame->kva);
 
 				break;
 			default:
@@ -484,6 +525,18 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt) {
 	/* TODO: Destroy all the supplemental_page_table hold by thread and
 	 * TODO: writeback all the modified contents to the storage. */
+	/* Remove the shared (copy-on-write) pte */
+	struct thread *cur_thread = thread_current();
+	if (hash_size(&spt->page_map) > 0) {
+		struct hash_iterator iter;
+		hash_first(&iter, &spt->page_map);
+		while (hash_next(&iter) != NULL) {
+			struct page *p = hash_entry(hash_cur(&iter), struct page, spt_elem);
+			if (p->frame && *(p->frame->ref_cnt) > 1) {
+				pml4_clear_page(cur_thread->pml4, p->va);
+			}
+		}
+	}
 	hash_destroy(&spt->page_map, spt_page_destroy);
 }
 

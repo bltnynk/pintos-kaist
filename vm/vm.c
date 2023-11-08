@@ -216,6 +216,58 @@ vm_stack_growth (void *addr) {
 	}
 }
 
+static void prefault_page(struct page *page, uintptr_t rsp) {
+	struct thread *cur_thread = thread_current();
+	int left = 0, right = 0, left_step = 1, right_step = 1;
+	void *uaddr = page->va;
+	uint64_t *pml4 = cur_thread->pml4;
+	struct supplemental_page_table *spt = &cur_thread->spt;
+	while (left_step <= 50) {
+		void *cur_uaddr = uaddr - PGSIZE * left_step;
+		if (pml4_get_page(pml4, cur_uaddr)) {
+			left = 1;
+			while (pml4_get_page(pml4, uaddr - PGSIZE * left_step * (left + 1))) {
+				++left;
+			}
+			break;
+		}
+		++left_step;
+	}
+	while (right_step <= 50) {
+		void *cur_uaddr = uaddr + PGSIZE * right_step;
+		if (pml4_get_page(pml4, cur_uaddr)) {
+			right = 1;
+			while (pml4_get_page(pml4, uaddr + PGSIZE * right_step * (right + 1))) {
+				++right;
+			}
+			break;
+		}
+		++right_step;
+	}
+	if (left >= right) {
+		for (int i = 1; i <= left; ++i) {
+			struct page *cand_page = spt_find_page(spt, uaddr + PGSIZE * left_step * i);
+			if (!cand_page) {
+				break;
+			}
+			if (!cand_page->frame && !vm_do_claim_page(cand_page)) {
+				break;
+			}
+		}
+	}
+	else {
+		for (int i = 1; i <= right; ++i) {
+			struct page *cand_page = spt_find_page(spt, uaddr - PGSIZE * right_step * i);
+			if (!cand_page) {
+				break;
+			}
+			if (!cand_page->frame && !vm_do_claim_page(cand_page)) {
+				break;
+			}
+		}
+	}
+}
+
 /* Return true on success */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
@@ -246,7 +298,11 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 			return false;
 		}
 	
-		return vm_do_claim_page (page);
+		if (!vm_do_claim_page (page)) {
+			return false;
+		}
+		prefault_page(page, f->rsp);
+		return true;
 	}
 }
 

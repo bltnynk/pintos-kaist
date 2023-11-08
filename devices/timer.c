@@ -127,6 +127,10 @@ timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
 	thread_tick ();
 
+#ifdef USERPROG
+	update_stat ();
+#endif
+
 	if (thread_mlfqs) {
 		increase_curr_recent_cpu();
 		if (ticks % TIMER_FREQ == 0){

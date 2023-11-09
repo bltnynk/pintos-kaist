@@ -278,6 +278,14 @@ vm_copy_on_write(struct page *page) {
 		page->frame->kva = new;
 
 		*(page->frame->ref_cnt) = *(page->frame->ref_cnt) - 1;
+		if (*(page->frame->ref_cnt)) {
+			for (struct list_elem *e = list_begin (&victim_list); e != list_end (&victim_list); e = list_next (e)) {
+				struct page *victim_page = list_entry (e, struct page, victim_list_elem);
+				if (victim_page->frame->kva == old_kva) {
+					pml4_set_page(victim_page->owner->pml4, victim_page->va, victim_page->frame->kva, victim_page->writable);
+				}
+			}
+		}
 		int *ref_cnt = malloc(sizeof(int));
 		*ref_cnt = 1;
 		page->frame->ref_cnt = ref_cnt;

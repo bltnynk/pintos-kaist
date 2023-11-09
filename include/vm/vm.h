@@ -55,7 +55,6 @@ struct page {
 
 	struct thread *owner;
 	struct list_elem victim_list_elem;
-	struct hash_elem frame_holder_elem;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -73,7 +72,7 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
-	struct hash *frame_holders;
+	int *ref_cnt;
 };
 
 /* The function table for page operations.
@@ -123,9 +122,6 @@ enum vm_type page_get_type (struct page *page);
 
 uint64_t page_hash_func (const struct hash_elem *e, void *aux);
 bool cmp_page_hash (const struct hash_elem *x, const struct hash_elem *y, void *aux);
-
-uint64_t page_addr_hash_func (const struct hash_elem *e, void *aux);
-bool cmp_page_addr_hash (const struct hash_elem *x, const struct hash_elem *y, void *aux);
 
 void spt_page_destroy(struct hash_elem *e, void *aux);
 void free_page_load_info(struct page_load_info *load_info);

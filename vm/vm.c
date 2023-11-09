@@ -195,7 +195,8 @@ vm_get_frame (void) {
 
 	frame->page = NULL;
 	frame->kva = new;
-	frame->ref_cnt = malloc(sizeof(int));
+	frame->frame_holders = (struct hash *) malloc(sizeof(struct hash));
+	hash_init(frame->frame_holders, page_addr_hash_func, cmp_page_addr_hash, NULL);
 
 	return frame;
 }
@@ -271,17 +272,28 @@ static void prefault_page(struct page *page) {
 
 static bool
 vm_copy_on_write(struct page *page) {
-	if (*(page->frame->ref_cnt) > 1) {
+	if (hash_size(page->frame->frame_holders) > 1){
 		void *old_kva = page->frame->kva;
 		void *new = palloc_get_page(PAL_USER);
 		memcpy(new, old_kva, PGSIZE);
 		page->frame->kva = new;
 
-		*(page->frame->ref_cnt) = *(page->frame->ref_cnt) - 1;
-		int *ref_cnt = malloc(sizeof(int));
-		*ref_cnt = 1;
-		page->frame->ref_cnt = ref_cnt;
+		struct hash *old_frame_holders = page->frame->frame_holders;
+		hash_delete(old_frame_holders, &page->frame_holder_elem);
+		if (hash_size(old_frame_holders) == 1) {
+			struct hash_iterator iter;
+			hash_first(&iter, old_frame_holders);
+			hash_next(&iter);
+			struct page *temp_page = hash_entry(hash_cur(&iter), struct page, frame_holder_elem);
+			pml4_set_page(temp_page->owner->pml4, temp_page->va, temp_page->frame->kva, temp_page->writable);
+		}
+		
+		struct hash *new_frame_holders = (struct hash *) malloc(sizeof(struct hash));
+		hash_init(new_frame_holders, page_addr_hash_func, cmp_page_addr_hash, NULL);
+		hash_insert(new_frame_holders, &page->frame_holder_elem);
+		page->frame->frame_holders = new_frame_holders;
 	}
+
 	if (!pml4_set_page(page->owner->pml4, page->va, page->frame->kva, page->writable)) {
 		return false;
 	}
@@ -343,9 +355,10 @@ vm_dealloc_page (struct page *page) {
 		lock_acquire(&victim_list_lock);
 		list_remove(&page->victim_list_elem);
 		lock_release(&victim_list_lock);
-		*(frame->ref_cnt) = *(frame->ref_cnt) - 1;
-		if (*(frame->ref_cnt) < 1) {
-			free(frame->ref_cnt);
+		hash_delete(frame->frame_holders, &page->frame_holder_elem);
+		if (hash_size(frame->frame_holders) < 1) {
+			hash_destroy(frame->frame_holders, NULL);
+			free(frame->frame_holders);
 		}
 		free(frame);
 	} else {
@@ -381,7 +394,8 @@ vm_do_claim_page (struct page *page) {
 
 	/* Set links */
 	frame->page = page;
-	*(frame->ref_cnt) = 1;
+	hash_clear(frame->frame_holders, NULL);
+	hash_insert(frame->frame_holders, &page->frame_holder_elem);
 	page->frame = frame;
 
 	ret = swap_in (page, frame->kva);
@@ -457,8 +471,8 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 				ASSERT (p->frame != NULL);
 				child_frame = (struct frame *)malloc(sizeof(struct frame));
 				child_frame->kva = p->frame->kva;
-				child_frame->ref_cnt = p->frame->ref_cnt;
-				*(child_frame->ref_cnt) = *(child_frame->ref_cnt) + 1;
+				child_frame->frame_holders = p->frame->frame_holders;
+				hash_insert(child_frame->frame_holders, &child_p->frame_holder_elem);
 				child_frame->page = child_p;
 				child_p->frame = child_frame;
 				if (!pml4_set_page(cur_thread->pml4, child_p->va, child_frame->kva, false)) {
@@ -494,8 +508,8 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 				ASSERT (p->frame != NULL);
 				child_frame = (struct frame *)malloc(sizeof(struct frame));
 				child_frame->kva = p->frame->kva;
-				child_frame->ref_cnt = p->frame->ref_cnt;
-				*(child_frame->ref_cnt) = *(child_frame->ref_cnt) + 1;
+				child_frame->frame_holders = p->frame->frame_holders;
+				hash_insert(child_frame->frame_holders, &child_p->frame_holder_elem);
 				child_frame->page = child_p;
 				child_p->frame = child_frame;
 				if (!pml4_set_page(cur_thread->pml4, child_p->va, child_frame->kva, false)) {
@@ -532,7 +546,7 @@ supplemental_page_table_kill (struct supplemental_page_table *spt) {
 		hash_first(&iter, &spt->page_map);
 		while (hash_next(&iter) != NULL) {
 			struct page *p = hash_entry(hash_cur(&iter), struct page, spt_elem);
-			if (p->frame && *(p->frame->ref_cnt) > 1) {
+			if (p->frame && hash_size(p->frame->frame_holders) > 1) {
 				pml4_clear_page(cur_thread->pml4, p->va);
 			}
 		}
@@ -562,4 +576,18 @@ cmp_page_hash (const struct hash_elem *x, const struct hash_elem *y, void *aux){
 void free_page_load_info(struct page_load_info *load_info) {
 	file_close(load_info->file);
 	free(load_info);
+}
+
+uint64_t
+page_addr_hash_func (const struct hash_elem *e, void *aux){
+	const struct page *p = hash_entry(e, struct page, spt_elem);
+	return hash_bytes(p, sizeof(p));
+}
+
+bool
+cmp_page_addr_hash (const struct hash_elem *x, const struct hash_elem *y, void *aux){
+	struct page *p_x = hash_entry(x, struct page, spt_elem);
+	struct page *p_y = hash_entry(y, struct page, spt_elem);
+
+	return p_x < p_y;
 }
